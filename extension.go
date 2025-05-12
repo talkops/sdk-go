@@ -1,11 +1,18 @@
 package talkops
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 )
+
+//go:embed categories.json
+var categoriesData []byte
+
+//go:embed event-types.json
+var eventTypesData []byte
 
 type Extension struct {
 	callbacks         map[string]func(args ...interface{})
@@ -30,8 +37,12 @@ var Categories []string
 var EventTypes []string
 
 func init() {
-	loadJSON("./categories.json", &Categories)
-	loadJSON("./event-types.json", &EventTypes)
+	if err := json.Unmarshal(categoriesData, &Categories); err != nil {
+		panic(fmt.Sprintf("Failed to parse categories.json: %v", err))
+	}
+	if err := json.Unmarshal(eventTypesData, &EventTypes); err != nil {
+		panic(fmt.Sprintf("Failed to parse event-types.json: %v", err))
+	}
 }
 
 func loadJSON(path string, v interface{}) {
@@ -174,43 +185,34 @@ func (e *Extension) Start() *Extension {
 	e.publisher = NewPublisher(
 		func() map[string]interface{} {
 			return map[string]interface{}{
-				"mercure":           parseToken(e.token),
-				"category":          e.category,
-				"demo":              e.demo,
-				"icon":              e.icon,
-				"installationSteps": e.installationSteps,
-				"instructions":      e.instructions,
-				"name":              e.name,
-				"parameters":        e.parameters,
-				"sdk":               map[string]interface{}{"name": "go", "version": os.Getenv("SDK_VERSION")},
-				"softwareVersion":   e.softwareVersion,
-				"functionSchemas":   e.functionSchemas,
-				"functions":         e.functions,
-				"callbacks":         e.callbacks,
-				"publisher":         nil,
+				"mercure": parseToken(e.token),
 			}
 		},
 		func() map[string]interface{} {
 			return map[string]interface{}{
-				"category":          e.category,
-				"demo":              e.demo,
-				"icon":              e.icon,
+				"category": e.category,
+				"demo": e.demo,
+				"icon": e.icon,
 				"installationSteps": e.installationSteps,
-				"instructions":      e.instructions,
-				"name":              e.name,
-				"parameters":        e.parameters,
-				"sdk":               map[string]interface{}{"name": "go", "version": os.Getenv("SDK_VERSION")},
-				"softwareVersion":   e.softwareVersion,
-				"functionSchemas":   e.functionSchemas,
+				"instructions": e.instructions,
+				"name": e.name,
+				"parameters": e.parameters,
+				"sdk": map[string]interface{}{"name": "go", "version": os.Getenv("SDK_VERSION")},
+				"softwareVersion": e.softwareVersion,
+				"functionSchemas": e.functionSchemas,
 			}
 		},
 	)
-	config := e.publisher.useConfig()
-	config["publisher"] = e.publisher
-	config["functions"] = e.functions
-	config["callbacks"] = e.callbacks
-	config["parameters"] = e.parameters
-	NewSubscriber(func() map[string]interface{} { return config })
+	NewSubscriber(func() map[string]interface{} {
+		return map[string]interface{}{
+			"callbacks": e.callbacks,
+			"extension": e,
+			"functions": e.functions,
+			"mercure": parseToken(e.token),
+			"parameters": e.parameters,
+			"publisher": e.publisher,
+		}
+	})
 	return e
 }
 

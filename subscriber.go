@@ -1,156 +1,132 @@
 package talkops
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
-	"reflect"
-	"runtime"
-	"strings"
-	"time"
+
+	_ "embed"
+
+	"github.com/r3labs/sse/v2"
 )
 
+//go:embed event-types.json
+var eventTypesData []byte
+
+var eventTypes []string
+
+func init() {
+	if err := json.Unmarshal(eventTypesData, &eventTypes); err != nil {
+		panic("Impossible de parser event-types.json")
+	}
+}
+
 type Subscriber struct {
+	client    *sse.Client
 	useConfig func() map[string]interface{}
 }
 
 func NewSubscriber(useConfig func() map[string]interface{}) *Subscriber {
+	config := useConfig()
+	mercure, ok := config["mercure"].(map[string]interface{})
+	if !ok {
+		panic("La configuration Mercure est manquante ou invalide")
+	}
+	topic, ok := mercure["subscriber"].(map[string]interface{})["topic"].(string)
+	if !ok {
+		panic("Le topic du subscriber est manquant ou invalide")
+	}
+	url, ok := mercure["url"].(string)
+	if !ok {
+		panic("L'URL Mercure est manquante ou invalide")
+	}
+	token, ok := mercure["subscriber"].(map[string]interface{})["token"].(string)
+	if !ok {
+		token = ""
+	}
+
+	client := sse.NewClient(fmt.Sprintf("%s?topic=%s", url, topic))
+	if token != "" {
+		client.Headers["Authorization"] = fmt.Sprintf("Bearer %s", token)
+	}
+
 	s := &Subscriber{
+		client:    client,
 		useConfig: useConfig,
 	}
-	go s.subscribe()
+
+	go s.listen()
 	return s
 }
 
-func (s *Subscriber) subscribe() {
-	for {
-		config := s.useConfig()
-		mercure := config["mercure"].(map[string]interface{})
-
-		url := fmt.Sprintf("%s?topic=%s",
-			mercure["url"].(string),
-			url.QueryEscape(mercure["subscriber"].(map[string]interface{})["topic"].(string)),
-		)
-
-		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s",
-			mercure["subscriber"].(map[string]interface{})["token"].(string)))
-
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		reader := bufio.NewReader(resp.Body)
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				break
-			}
-
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
-				var event map[string]interface{}
-				if err := json.Unmarshal([]byte(data), &event); err != nil {
-					continue
-				}
-				s.onEvent(event)
-			}
-		}
-
-		resp.Body.Close()
-	}
-}
-
-func (s *Subscriber) onEvent(event map[string]interface{}) {
+func (s *Subscriber) listen() {
 	config := s.useConfig()
-
-	switch event["type"] {
-	case "ping":
-		config["publisher"].(*Publisher).OnPing()
-
-	case "function_call":
-		name := event["name"].(string)
-		args := event["args"].(map[string]interface{})
-		defaultArgs := event["defaultArgs"].(map[string]interface{})
-
-		for _, fn := range config["functions"].([]func(args ...interface{}) interface{}) {
-			if fnName := getFunctionName(fn); fnName == name {
-				var fnArgs []interface{}
-				for _, argName := range getFunctionArgs(fn) {
-					if val, ok := args[argName]; ok {
-						fnArgs = append(fnArgs, val)
-					} else if val, ok := defaultArgs[argName]; ok {
-						fnArgs = append(fnArgs, val)
+	callbacks, _ := config["callbacks"].(map[string]func(args ...interface{}))
+	functions, _ := config["functions"].([]func(args ...interface{}) interface{})
+	parameters, _ := config["parameters"].([]Parameter)
+	publisher, _ := config["publisher"].(*Publisher)
+	s.client.SubscribeRaw(func(msg *sse.Event) {
+		if len(msg.Data) == 0 {
+			return
+		}
+		var event map[string]interface{}
+		if err := json.Unmarshal(msg.Data, &event); err != nil {
+			return
+		}
+		eventType, _ := event["type"].(string)
+		switch eventType {
+		case "ping":
+			if publisher != nil {
+				publisher.OnPing()
+			}
+			return
+		case "function_call":
+			name, _ := event["name"].(string)
+			args, _ := event["args"].(map[string]interface{})
+			for _, fn := range functions {
+				fnType := fmt.Sprintf("%T", fn)
+				if fnType == name {
+					// En Go, il n'est pas trivial de récupérer les noms des arguments d'une fonction
+					// Il faudrait une convention ou une structure différente pour les fonctions
+					// Ici, on suppose que la fonction prend un seul argument map[string]interface{}
+					output := fn(args)
+					event["output"] = output
+					if publisher != nil {
+						publisher.PublishEvent(event)
+					}
+					return
+				}
+			}
+			return
+		case "boot":
+			params, _ := event["parameters"].(map[string]interface{})
+			for name, value := range params {
+				for i := range parameters {
+					if parameters[i].Name == name {
+						parameters[i].SetValue(fmt.Sprintf("%v", value))
 					}
 				}
-				output := fn(fnArgs...)
-				event["output"] = output
-				config["publisher"].(*Publisher).PublishEvent(event)
+			}
+			ready := true
+			for i := range parameters {
+				if !parameters[i].Optional && !parameters[i].HasValue() {
+					ready = false
+				}
+			}
+			if publisher != nil {
+				publisher.PublishState()
+			}
+			if !ready {
 				return
 			}
 		}
-
-	case "boot":
-		parameters := event["parameters"].(map[string]interface{})
-		for name, value := range parameters {
-			for _, param := range config["parameters"].([]Parameter) {
-				if param.Name == name {
-					param.Value = value.(string)
+		// Gestion des event-types standards
+		for _, t := range eventTypes {
+			if eventType == t {
+				if cb, ok := callbacks[eventType]; ok {
+					cb(event)
 				}
+				return
 			}
 		}
-
-		ready := true
-		for _, param := range config["parameters"].([]Parameter) {
-			if !param.Optional && param.Value == "" {
-				ready = false
-				break
-			}
-		}
-
-		config["publisher"].(*Publisher).PublishState()
-		if !ready {
-			return
-		}
-
-	default:
-		if callback, ok := config["callbacks"].(map[string]func(args ...interface{}))[event["type"].(string)]; ok {
-			var callbackArgs []interface{}
-			if args, ok := event["args"].(map[string]interface{}); ok {
-				for _, argName := range getFunctionArgs(callback) {
-					if val, ok := args[argName]; ok {
-						callbackArgs = append(callbackArgs, val)
-					}
-				}
-			}
-			callback(callbackArgs...)
-		}
-	}
-}
-
-func getFunctionName(fn interface{}) string {
-	v := reflect.ValueOf(fn)
-	t := v.Type()
-	if t.Kind() != reflect.Func {
-		return ""
-	}
-	return runtime.FuncForPC(v.Pointer()).Name()
-}
-
-func getFunctionArgs(fn interface{}) []string {
-	v := reflect.ValueOf(fn)
-	t := v.Type()
-	if t.Kind() != reflect.Func {
-		return nil
-	}
-	var args []string
-	if t.NumIn() == 1 && t.In(0).Kind() == reflect.Slice {
-		args = append(args, "args")
-	}
-	return args
+	})
 }
