@@ -8,6 +8,6 @@ type Link struct {
 func (l *Link) ToJSON() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "link",
-		"url":  l.URL,
+		"url": l.URL,
 	}
 }

@@ -16,14 +16,8 @@ func NewReadme(getter func() map[string]interface{}) *Readme {
 }
 
 func (r *Readme) generate() {
-	tmpl, err := template.ParseFiles("/app/readme.tmpl")
-	if err != nil {
-		return
-	}
-	f, err := os.Create("/app/README.md")
-	if err != nil {
-		return
-	}
+	tmpl, _ := template.New("readme").Parse(ReadmeTemplate)
+	f, _ := os.Create("/app/README.md")
 	defer f.Close()
 	tmpl.Execute(f, r.getter())
 }

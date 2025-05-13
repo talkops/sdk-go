@@ -5,14 +5,45 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/openai/openai-go"
 	"os"
+	"runtime/debug"
+	"strings"
 )
+
+//go:embed readme.tmpl
+var ReadmeTemplateData []byte
+var ReadmeTemplate string
 
 //go:embed categories.json
 var categoriesData []byte
+var Categories []string
 
 //go:embed event-types.json
 var eventTypesData []byte
+var EventTypes []string
+
+func init() {
+	ReadmeTemplate = string(ReadmeTemplateData)
+	if err := json.Unmarshal(categoriesData, &Categories); err != nil {
+		panic(fmt.Sprintf("Failed to parse categories.json: %v", err))
+	}
+	if err := json.Unmarshal(eventTypesData, &EventTypes); err != nil {
+		panic(fmt.Sprintf("Failed to parse event-types.json: %v", err))
+	}
+}
+
+func GetSdkVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/talkops/sdk-go" {
+				return strings.TrimPrefix(dep.Version, "v")
+			}
+		}
+	}
+	return ""
+}
 
 type Extension struct {
 	callbacks         map[string]func(args ...interface{})
@@ -20,7 +51,7 @@ type Extension struct {
 	demo              bool
 	features          []string
 	functions         []func(args ...interface{}) interface{}
-	functionSchemas   []map[string]interface{}
+	functionSchemas   []openai.FunctionDefinitionParam
 	icon              string
 	installationSteps []string
 	instructions      string
@@ -33,34 +64,17 @@ type Extension struct {
 	website           string
 }
 
-var Categories []string
-var EventTypes []string
-
-func init() {
-	if err := json.Unmarshal(categoriesData, &Categories); err != nil {
-		panic(fmt.Sprintf("Failed to parse categories.json: %v", err))
-	}
-	if err := json.Unmarshal(eventTypesData, &EventTypes); err != nil {
-		panic(fmt.Sprintf("Failed to parse event-types.json: %v", err))
-	}
-}
-
-func loadJSON(path string, v interface{}) {
-	f, err := os.Open(path)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	json.NewDecoder(f).Decode(v)
-}
-
-func NewExtension(token string) *Extension {
-	if token == "" {
-		token = os.Getenv("TALKOPS_TOKEN")
-	}
+func NewExtension() *Extension {
 	return &Extension{
 		callbacks: make(map[string]func(args ...interface{})),
-		token:     token,
+		token: os.Getenv("TALKOPS_TOKEN"),
+	}
+}
+
+func NewExtensionFromToken(token string) *Extension {
+	return &Extension{
+		callbacks: make(map[string]func(args ...interface{})),
+		token: token,
 	}
 }
 
@@ -152,7 +166,7 @@ func (e *Extension) SetInstructions(instructions string) *Extension {
 	return e
 }
 
-func (e *Extension) SetFunctionSchemas(schemas []map[string]interface{}) *Extension {
+func (e *Extension) SetFunctionSchemas(schemas []openai.FunctionDefinitionParam) *Extension {
 	e.functionSchemas = schemas
 	return e
 }
@@ -182,10 +196,36 @@ func (e *Extension) Start() *Extension {
 		return e
 	}
 	e.started = true
+	mercure := parseToken(e.token)
+	version := GetSdkVersion()
+	fmt.Println(os.Getenv("ENV"))
+	if os.Getenv("ENV") == "development" {
+		NewManifest(func() map[string]interface{} {
+			return map[string]interface{}{
+				"category": e.category,
+				"demo": e.demo,
+				"features": e.features,
+				"icon": e.icon,
+				"name": e.name,
+				"sdk": map[string]interface{}{
+					"name": "go",
+					"version": version,
+				},
+				"softwareVersion": e.softwareVersion,
+				"website": e.website,
+			}
+		})
+		NewReadme(func() map[string]interface{} {
+			return map[string]interface{}{
+				"features": e.features,
+				"name": e.name,
+			}
+		})
+	}
 	e.publisher = NewPublisher(
 		func() map[string]interface{} {
 			return map[string]interface{}{
-				"mercure": parseToken(e.token),
+				"mercure": mercure,
 			}
 		},
 		func() map[string]interface{} {
@@ -197,7 +237,10 @@ func (e *Extension) Start() *Extension {
 				"instructions": e.instructions,
 				"name": e.name,
 				"parameters": e.parameters,
-				"sdk": map[string]interface{}{"name": "go", "version": os.Getenv("SDK_VERSION")},
+				"sdk": map[string]interface{}{
+					"name": "go",
+					"version": version,
+				},
 				"softwareVersion": e.softwareVersion,
 				"functionSchemas": e.functionSchemas,
 			}
@@ -208,7 +251,7 @@ func (e *Extension) Start() *Extension {
 			"callbacks": e.callbacks,
 			"extension": e,
 			"functions": e.functions,
-			"mercure": parseToken(e.token),
+			"mercure": mercure,
 			"parameters": e.parameters,
 			"publisher": e.publisher,
 		}
