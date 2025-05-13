@@ -39,10 +39,10 @@ func NewSubscriber(useConfig func() map[string]interface{}) *Subscriber {
 }
 
 func (s *Subscriber) onEvent(event map[string]interface{}) {
-	fmt.Println(event)
+	//fmt.Println(event)
 	config := s.useConfig()
 	callbacks, _ := config["callbacks"].(map[string]func(args ...interface{}))
-	functions, _ := config["functions"].([]func(args ...interface{}) interface{})
+	functions, _ := config["functions"].([]interface{})
 	parameters, _ := config["parameters"].([]Parameter)
 	publisher, _ := config["publisher"].(*Publisher)
 	eventType, _ := event["type"].(string)
@@ -55,12 +55,22 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 	case "function_call":
 		name, _ := event["name"].(string)
 		args, _ := event["args"].(map[string]interface{})
+		defaultArgs, _ := event["defaultArgs"].(map[string]interface{})
+
+		fmt.Println("function_call")
+		fmt.Println(name)
+		fmt.Println(args)
+		fmt.Println(defaultArgs)
+
+		for _, fn := range functions {
+			fmt.Println(fmt.Sprintf("%T", fn))
+			//fnType := fmt.Sprintf("%T", fn)
+		}
+		
+		/*
 		for _, fn := range functions {
 			fnType := fmt.Sprintf("%T", fn)
 			if fnType == name {
-				// En Go, il n'est pas trivial de récupérer les noms des arguments d'une fonction
-				// Il faudrait une convention ou une structure différente pour les fonctions
-				// Ici, on suppose que la fonction prend un seul argument map[string]interface{}
 				output := fn(args)
 				event["output"] = output
 				if publisher != nil {
@@ -69,6 +79,7 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 				return
 			}
 		}
+		*/
 		return
 	case "boot":
 		params, _ := event["parameters"].(map[string]interface{})

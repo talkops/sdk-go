@@ -5,11 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/openai/openai-go"
+	//"github.com/openai/openai-go"
 	"os"
 	"runtime/debug"
 	"strings"
 )
+
+type Function struct {
+	Name string `json:"name"`
+	Description string `json:"description"`
+	Parameters map[string]interface{} `json:"parameters,omitempty"`
+	Handler func(map[string]interface{}) string `json:"-"`
+}
 
 //go:embed readme.tmpl
 var ReadmeTemplateData []byte
@@ -50,8 +57,8 @@ type Extension struct {
 	category          string
 	demo              bool
 	features          []string
-	functions         []func(args ...interface{}) interface{}
-	functionSchemas   []openai.FunctionDefinitionParam
+	functions         []interface{}
+	functionSchemas   []map[string]interface{}
 	icon              string
 	installationSteps []string
 	instructions      string
@@ -166,12 +173,12 @@ func (e *Extension) SetInstructions(instructions string) *Extension {
 	return e
 }
 
-func (e *Extension) SetFunctionSchemas(schemas []openai.FunctionDefinitionParam) *Extension {
+func (e *Extension) SetFunctionSchemas(schemas []map[string]interface{}) *Extension {
 	e.functionSchemas = schemas
 	return e
 }
 
-func (e *Extension) SetFunctions(functions []func(args ...interface{}) interface{}) *Extension {
+func (e *Extension) SetFunctions(functions []interface{}) *Extension {
 	e.functions = functions
 	return e
 }
