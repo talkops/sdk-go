@@ -1,11 +1,16 @@
 package talkops
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,7 +24,7 @@ type Publisher struct {
 func NewPublisher(useConfig func() map[string]interface{}, useState func() map[string]interface{}) *Publisher {
 	p := &Publisher{
 		useConfig: useConfig,
-		useState:  useState,
+		useState: useState,
 	}
 	p.publishData(`{"type":"init"}`)
 	go p.publishStatePeriodically()
@@ -37,12 +42,12 @@ func (p *Publisher) PublishState() {
 }
 
 func (p *Publisher) OnPing() {
-	p.lastPingAt = time.Now().UnixMilli()
+	p.lastPingAt = time.Now().Unix()
 	p.PublishEvent(map[string]interface{}{"type": "pong"})
 }
 
 func (p *Publisher) PublishEvent(event map[string]interface{}) {
-	if p.lastPingAt > 0 && p.lastPingAt < time.Now().UnixMilli()-6000 {
+	if p.lastPingAt > 0 && p.lastPingAt < time.Now().Unix()-6 {
 		return
 	}
 	eventJSON, _ := json.Marshal(event)
@@ -50,6 +55,8 @@ func (p *Publisher) PublishEvent(event map[string]interface{}) {
 }
 
 func (p *Publisher) publishData(data string) {
+	fmt.Println("This is a standard output message.")
+	fmt.Fprintln(os.Stderr, "This is a standard error message.")
 	config := p.useConfig()
 	mercure := config["mercure"].(map[string]interface{})
 	form := url.Values{}
@@ -64,18 +71,16 @@ func (p *Publisher) publishData(data string) {
 
 func (p *Publisher) publishStatePeriodically() {
 	for {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		event := map[string]interface{}{
-			"type":  "state",
+			"type": "state",
 			"state": p.useState(),
 		}
 		eventJSON, _ := json.Marshal(event)
 		lastEventState := string(eventJSON)
 		if p.lastEventState != lastEventState {
-			fmt.Println(lastEventState)
-			fmt.Println(p.lastEventState)
 			p.lastEventState = lastEventState
-			p.PublishEvent(event)
+			go p.PublishEvent(event)
 		}
 	}
 }

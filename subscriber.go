@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/r3labs/sse/v2"
+	"reflect"
 )
 
 type Subscriber struct {
@@ -17,16 +18,13 @@ func NewSubscriber(useConfig func() map[string]interface{}) *Subscriber {
 	topic := mercure["subscriber"].(map[string]interface{})["topic"].(string)
 	url := mercure["url"].(string)
 	token := mercure["subscriber"].(map[string]interface{})["token"].(string)
-
 	client := sse.NewClient(fmt.Sprintf("%s?topic=%s", url, topic))
 	if token != "" {
 		client.Headers["Authorization"] = fmt.Sprintf("Bearer %s", token)
 	}
-
 	s := &Subscriber{
 		useConfig: useConfig,
 	}
-
 	client.SubscribeRaw(func(msg *sse.Event) {
 		var event map[string]interface{}
 		if err := json.Unmarshal(msg.Data, &event); err != nil {
@@ -34,16 +32,14 @@ func NewSubscriber(useConfig func() map[string]interface{}) *Subscriber {
 		}
 		s.onEvent(event)
 	})
-
 	return s
 }
 
 func (s *Subscriber) onEvent(event map[string]interface{}) {
-	//fmt.Println(event)
 	config := s.useConfig()
-	callbacks, _ := config["callbacks"].(map[string]func(args ...interface{}))
-	functions, _ := config["functions"].([]interface{})
-	parameters, _ := config["parameters"].([]Parameter)
+	callbacks, _ := config["callbacks"].(map[string]reflect.Value)
+	functions, _ := config["functions"].(map[string]reflect.Value)
+	parameters, _ := config["parameters"].([]*Parameter)
 	publisher, _ := config["publisher"].(*Publisher)
 	eventType, _ := event["type"].(string)
 	switch eventType {
@@ -55,38 +51,32 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 	case "function_call":
 		name, _ := event["name"].(string)
 		args, _ := event["args"].(map[string]interface{})
-		defaultArgs, _ := event["defaultArgs"].(map[string]interface{})
-
-		fmt.Println("function_call")
-		fmt.Println(name)
-		fmt.Println(args)
-		fmt.Println(defaultArgs)
-
-		for _, fn := range functions {
-			fmt.Println(fmt.Sprintf("%T", fn))
-			//fnType := fmt.Sprintf("%T", fn)
+		functionArgs, _ := event["defaultArgs"].(map[string]interface{})
+		for k, v := range args {
+			functionArgs[k] = v
 		}
-		
-		/*
-		for _, fn := range functions {
-			fnType := fmt.Sprintf("%T", fn)
-			if fnType == name {
-				output := fn(args)
-				event["output"] = output
-				if publisher != nil {
-					publisher.PublishEvent(event)
+		if function, ok := functions[name]; ok {
+			go func() {
+				result := function.Call([]reflect.Value{reflect.ValueOf(functionArgs)})
+				if len(result) > 0 {
+					event["output"] = result[0].Interface()
 				}
-				return
-			}
+				publisher.PublishEvent(event)
+			}()
 		}
-		*/
 		return
 	case "boot":
 		params, _ := event["parameters"].(map[string]interface{})
 		for name, value := range params {
 			for i := range parameters {
 				if parameters[i].Name == name {
-					parameters[i].SetValue(fmt.Sprintf("%v", value))
+					fmt.Println(parameters[i].Name)
+					fmt.Println(value)
+					if value == nil {
+						parameters[i].SetValue("")
+					} else {
+						parameters[i].SetValue(fmt.Sprintf("%v", value))
+					}
 				}
 			}
 		}
@@ -96,17 +86,18 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 				ready = false
 			}
 		}
-		if publisher != nil {
-			publisher.PublishState()
-		}
+		publisher.PublishState()
 		if !ready {
 			return
 		}
 	}
 	for _, t := range EventTypes {
 		if eventType == t {
-			if cb, ok := callbacks[eventType]; ok {
-				cb(event)
+			if callback, ok := callbacks[eventType]; ok {
+				args, _ := event["args"].(map[string]interface{})
+				go func() {
+					callback.Call([]reflect.Value{reflect.ValueOf(args)})
+				}()
 			}
 			return
 		}

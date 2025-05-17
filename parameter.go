@@ -7,14 +7,15 @@ import (
 )
 
 type Parameter struct {
-	Name            string
-	Description     string
-	Value           string
-	DefaultValue    string
-	AvailableValues []string
-	PossibleValues  []string
-	Optional        bool
-	Type            string
+	Name string `json:"name"`
+	Description string `json:"description"`
+	Value string `json:"-"`
+	DefaultValue string `json:"defaultValue"`
+	AvailableValues []string `json:"availableValues"`
+	PossibleValues []string `json:"possibleValues"`
+	Optional bool `json:"optional"`
+	Type string `json:"type"`
+	Env bool `json:"env"`
 }
 
 var AllowedTypes = []string{
@@ -33,21 +34,27 @@ var AllowedTypes = []string{
 	"color",
 }
 
-func NewParameter(name string) (*Parameter, error) {
+func NewParameter(name string) *Parameter {
 	if name == "" {
-		return nil, fmt.Errorf("name must be a non-empty string")
+		panic("name must be a non-empty string")
 	}
 
 	matched, err := regexp.MatchString(`^[A-Z0-9_]+$`, name)
 	if err != nil || !matched {
-		return nil, fmt.Errorf("name must contain only uppercase letters, numbers, and underscores")
+		panic("name must contain only uppercase letters, numbers, and underscores")
 	}
 
 	return &Parameter{
-		Name:     name,
-		Type:     "text",
+		Name: name,
+		Description: "",
+		Value: "",
+		DefaultValue: "",
+		AvailableValues: []string{},
+		PossibleValues: []string{},
 		Optional: false,
-	}, nil
+		Type: "text",
+		Env: os.Getenv(name) != "",
+	}
 }
 
 func (p *Parameter) SetOptional(optional bool) *Parameter {
@@ -55,30 +62,27 @@ func (p *Parameter) SetOptional(optional bool) *Parameter {
 	return p
 }
 
-func (p *Parameter) SetDescription(description string) (*Parameter, error) {
+func (p *Parameter) SetDescription(description string) *Parameter {
 	if description == "" {
-		return nil, fmt.Errorf("description must be a non-empty string")
+		panic("description must be a non-empty string")
 	}
 	p.Description = description
-	return p, nil
+	return p
 }
 
-func (p *Parameter) SetDefaultValue(defaultValue string) (*Parameter, error) {
-	if defaultValue == "" {
-		return nil, fmt.Errorf("defaultValue must be a non-empty string")
-	}
+func (p *Parameter) SetDefaultValue(defaultValue string) *Parameter {
 	p.DefaultValue = defaultValue
-	return p, nil
+	return p
 }
 
-func (p *Parameter) SetType(type_ string) (*Parameter, error) {
+func (p *Parameter) SetType(type_ string) *Parameter {
 	for _, t := range AllowedTypes {
 		if t == type_ {
 			p.Type = type_
-			return p, nil
+			return p
 		}
 	}
-	return nil, fmt.Errorf("type must be one of: %v", AllowedTypes)
+	panic(fmt.Sprintf("type must be one of: %v", AllowedTypes))
 }
 
 func (p *Parameter) GetValue() string {
@@ -91,53 +95,37 @@ func (p *Parameter) GetValue() string {
 	return p.DefaultValue
 }
 
-func (p *Parameter) SetValue(value string) (*Parameter, error) {
-	if value == "" {
-		return nil, fmt.Errorf("value must be a non-empty string")
-	}
+func (p *Parameter) SetValue(value string) *Parameter {
 	p.Value = value
-	return p, nil
+	return p
 }
 
 func (p *Parameter) HasValue() bool {
 	return p.GetValue() != ""
 }
 
-func (p *Parameter) SetAvailableValues(values []string) (*Parameter, error) {
+func (p *Parameter) SetAvailableValues(values []string) *Parameter {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("availableValues must be a non-empty list")
+		panic("availableValues must be a non-empty list")
 	}
 	for _, v := range values {
 		if v == "" {
-			return nil, fmt.Errorf("each value in availableValues must be a non-empty string")
+			panic("each value in availableValues must be a non-empty string")
 		}
 	}
 	p.AvailableValues = values
-	return p, nil
+	return p
 }
 
-func (p *Parameter) SetPossibleValues(values []string) (*Parameter, error) {
+func (p *Parameter) SetPossibleValues(values []string) *Parameter {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("possibleValues must be a non-empty list")
+		panic("possibleValues must be a non-empty list")
 	}
 	for _, v := range values {
 		if v == "" {
-			return nil, fmt.Errorf("each value in possibleValues must be a non-empty string")
+			panic("each value in possibleValues must be a non-empty string")
 		}
 	}
 	p.PossibleValues = values
-	return p, nil
-}
-
-func (p *Parameter) ToJSON() map[string]interface{} {
-	return map[string]interface{}{
-		"name":            p.Name,
-		"description":     p.Description,
-		"env":             os.Getenv(p.Name) != "",
-		"defaultValue":    p.DefaultValue,
-		"availableValues": p.AvailableValues,
-		"possibleValues":  p.PossibleValues,
-		"optional":        p.Optional,
-		"type":            p.Type,
-	}
+	return p
 }

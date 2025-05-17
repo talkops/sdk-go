@@ -5,18 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	//"github.com/openai/openai-go"
 	"os"
+	"reflect"
 	"runtime/debug"
 	"strings"
 )
-
-type Function struct {
-	Name string `json:"name"`
-	Description string `json:"description"`
-	Parameters map[string]interface{} `json:"parameters,omitempty"`
-	Handler func(map[string]interface{}) string `json:"-"`
-}
 
 //go:embed readme.tmpl
 var ReadmeTemplateData []byte
@@ -32,15 +25,11 @@ var EventTypes []string
 
 func init() {
 	ReadmeTemplate = string(ReadmeTemplateData)
-	if err := json.Unmarshal(categoriesData, &Categories); err != nil {
-		panic(fmt.Sprintf("Failed to parse categories.json: %v", err))
-	}
-	if err := json.Unmarshal(eventTypesData, &EventTypes); err != nil {
-		panic(fmt.Sprintf("Failed to parse event-types.json: %v", err))
-	}
+	json.Unmarshal(categoriesData, &Categories)
+	json.Unmarshal(eventTypesData, &EventTypes)
 }
 
-func GetSdkVersion() string {
+func getSdkVersion() string {
 	info, ok := debug.ReadBuildInfo()
 	if ok {
 		for _, dep := range info.Deps {
@@ -53,17 +42,17 @@ func GetSdkVersion() string {
 }
 
 type Extension struct {
-	callbacks         map[string]func(args ...interface{})
+	callbacks         map[string]reflect.Value
 	category          string
 	demo              bool
 	features          []string
-	functions         []interface{}
+	functions         map[string]reflect.Value
 	functionSchemas   []map[string]interface{}
 	icon              string
 	installationSteps []string
 	instructions      string
 	name              string
-	parameters        []Parameter
+	parameters        []*Parameter
 	publisher         *Publisher
 	softwareVersion   string
 	started           bool
@@ -73,14 +62,14 @@ type Extension struct {
 
 func NewExtension() *Extension {
 	return &Extension{
-		callbacks: make(map[string]func(args ...interface{})),
+		callbacks: make(map[string]reflect.Value),
 		token: os.Getenv("TALKOPS_TOKEN"),
 	}
 }
 
 func NewExtensionFromToken(token string) *Extension {
 	return &Extension{
-		callbacks: make(map[string]func(args ...interface{})),
+		callbacks: make(map[string]reflect.Value),
 		token: token,
 	}
 }
@@ -160,7 +149,7 @@ func (e *Extension) SetInstallationSteps(steps []string) *Extension {
 	return e
 }
 
-func (e *Extension) SetParameters(params []Parameter) *Extension {
+func (e *Extension) SetParameters(params []*Parameter) *Extension {
 	e.parameters = params
 	return e
 }
@@ -178,12 +167,15 @@ func (e *Extension) SetFunctionSchemas(schemas []map[string]interface{}) *Extens
 	return e
 }
 
-func (e *Extension) SetFunctions(functions []interface{}) *Extension {
-	e.functions = functions
+func (e *Extension) SetFunctions(functions map[string]func(args map[string]interface{}) string) *Extension {
+	e.functions = make(map[string]reflect.Value)
+	for name, fn := range functions {
+		e.functions[name] = reflect.ValueOf(fn)
+	}
 	return e
 }
 
-func (e *Extension) On(eventType string, cb func(args ...interface{})) *Extension {
+func (e *Extension) On(eventType string, cb func(args map[string]interface{})) *Extension {
 	found := false
 	for _, t := range EventTypes {
 		if t == eventType {
@@ -194,7 +186,7 @@ func (e *Extension) On(eventType string, cb func(args ...interface{})) *Extensio
 	if !found {
 		panic(fmt.Sprintf("eventType must be one of: %v", EventTypes))
 	}
-	e.callbacks[eventType] = cb
+	e.callbacks[eventType] = reflect.ValueOf(cb)
 	return e
 }
 
@@ -203,9 +195,10 @@ func (e *Extension) Start() *Extension {
 		return e
 	}
 	e.started = true
-	mercure := parseToken(e.token)
-	version := GetSdkVersion()
-	fmt.Println(os.Getenv("ENV"))
+	decoded, _ := base64.StdEncoding.DecodeString(e.token)
+	var mercure map[string]interface{}
+	json.Unmarshal(decoded, &mercure)
+	version := getSdkVersion()
 	if os.Getenv("ENV") == "development" {
 		NewManifest(func() map[string]interface{} {
 			return map[string]interface{}{
@@ -266,22 +259,6 @@ func (e *Extension) Start() *Extension {
 	return e
 }
 
-func parseToken(token string) map[string]interface{} {
-	if token == "" {
-		return map[string]interface{}{}
-	}
-	decoded, err := base64.StdEncoding.DecodeString(token)
-	if err != nil {
-		panic(err)
-	}
-	var result map[string]interface{}
-	err = json.Unmarshal(decoded, &result)
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 func (e *Extension) EnableAlarm() *Extension {
 	if e.publisher != nil {
 		e.publisher.PublishEvent(map[string]interface{}{"type": "alarm"})
@@ -289,15 +266,11 @@ func (e *Extension) EnableAlarm() *Extension {
 	return e
 }
 
-func (e *Extension) SendMedias(medias ...interface{}) *Extension {
+func (e *Extension) SendMedias(medias []*Media) *Extension {
 	if e.publisher != nil {
-		var mediaList []interface{}
-		for _, m := range medias {
-			mediaList = append(mediaList, m)
-		}
 		e.publisher.PublishEvent(map[string]interface{}{
-			"type":   "medias",
-			"medias": mediaList,
+			"type": "medias",
+			"medias": medias,
 		})
 	}
 	return e
