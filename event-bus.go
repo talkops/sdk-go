@@ -2,11 +2,13 @@ package talkops
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"reflect"
+	"sync"
 	"time"
 )
 
@@ -15,6 +17,7 @@ type EventBus struct {
 	useConfig func() map[string]interface{}
 	lastEventState string
 	client net.Conn
+	writeMutex sync.Mutex
 }
 
 func NewEventBus(useState func() map[string]interface{}, useConfig func() map[string]interface{}) *EventBus {
@@ -28,13 +31,7 @@ func NewEventBus(useState func() map[string]interface{}, useConfig func() map[st
 		"type": "init",
 	})
 	go eb.publishStatePeriodically()
-	scanner := bufio.NewScanner(eb.client)
-	for scanner.Scan() {
-		var event map[string]interface{}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
-			go eb.onEvent(event)
-		}
-	}
+	go eb.listen()
 	return eb
 }
 
@@ -49,8 +46,22 @@ func (eb *EventBus) PublishState() {
 }
 
 func (eb *EventBus) PublishEvent(event map[string]interface{}) {
-	data, _ := json.Marshal(event)
-	eb.client.Write(data) // data is well transmitted
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.Encode(event)
+	eb.writeMutex.Lock()
+	defer eb.writeMutex.Unlock()
+	eb.client.Write(buf.Bytes())
+}
+
+func (eb *EventBus) listen() {
+	scanner := bufio.NewScanner(eb.client)
+	for scanner.Scan() {
+		var event map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
+			go eb.onEvent(event)
+		}
+	}
 }
 
 func (eb *EventBus) publishStatePeriodically() {
@@ -76,23 +87,6 @@ func (eb *EventBus) onEvent(event map[string]interface{}) {
 	parameters, _ := config["parameters"].([]*Parameter)
 	eventType, _ := event["type"].(string)
 	switch eventType {
-	case "function_call":
-		name, _ := event["name"].(string)
-		args, _ := event["args"].(map[string]interface{})
-		functionArgs, _ := event["defaultArgs"].(map[string]interface{})
-		for k, v := range args {
-			functionArgs[k] = v
-		}
-		if function, ok := functions[name]; ok {
-			go func() {
-				result := function.Call([]reflect.Value{reflect.ValueOf(functionArgs)})
-				if len(result) > 0 {
-					event["output"] = result[0].Interface()
-				}
-				eb.PublishEvent(event)
-			}()
-		}
-		return
 	case "boot":
 		params, _ := event["parameters"].(map[string]interface{})
 		for name, value := range params {
@@ -116,6 +110,23 @@ func (eb *EventBus) onEvent(event map[string]interface{}) {
 		if !ready {
 			return
 		}
+	case "function_call":
+		name, _ := event["name"].(string)
+		args, _ := event["args"].(map[string]interface{})
+		functionArgs, _ := event["defaultArgs"].(map[string]interface{})
+		for k, v := range args {
+			functionArgs[k] = v
+		}
+		if function, ok := functions[name]; ok {
+			go func() {
+				result := function.Call([]reflect.Value{reflect.ValueOf(functionArgs)})
+				if len(result) > 0 {
+					event["output"] = result[0].Interface()
+				}
+				eb.PublishEvent(event)
+			}()
+		}
+		return
 	}
 	for _, t := range EventTypes {
 		if eventType == t {

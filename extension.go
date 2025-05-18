@@ -237,44 +237,37 @@ func (e *Extension) Start() *Extension {
 			}
 		},
 	)
+	select {}
 	return e
 }
 
 func (e *Extension) EnableAlarm() *Extension {
-	if e.eventBus != nil {
-		e.eventBus.PublishEvent(map[string]interface{}{
-			"type": "alarm",
-		})
-	}
+	go e.eventBus.PublishEvent(map[string]interface{}{
+		"type": "alarm",
+	})
 	return e
 }
 
 func (e *Extension) SendMedias(medias []*Media) *Extension {
-	if e.eventBus != nil {
-		e.eventBus.PublishEvent(map[string]interface{}{
-			"type": "medias",
-			"medias": medias,
-		})
-	}
+	go e.eventBus.PublishEvent(map[string]interface{}{
+		"type": "medias",
+		"medias": medias,
+	})
 	return e
 }
 
 func (e *Extension) SendMessage(text string) *Extension {
-	if e.eventBus != nil {
-		e.eventBus.PublishEvent(map[string]interface{}{
-			"type": "message",
-			"text": text,
-		})
-	}
+	go e.eventBus.PublishEvent(map[string]interface{}{
+		"type": "message",
+		"text": text,
+	})
 	return e
 }
 
 func (e *Extension) SendNotification(text string) *Extension {
-	if e.eventBus != nil {
-		e.eventBus.PublishEvent(map[string]interface{}{
-			"type": "notification",
-			"text": text,
-		})
-	}
+	go e.eventBus.PublishEvent(map[string]interface{}{
+		"type": "notification",
+		"text": text,
+	})
 	return e
 }
