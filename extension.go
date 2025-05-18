@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -42,35 +41,27 @@ func getSdkVersion() string {
 }
 
 type Extension struct {
-	callbacks         map[string]reflect.Value
-	category          string
-	demo              bool
-	features          []string
-	functions         map[string]reflect.Value
-	functionSchemas   []map[string]interface{}
-	icon              string
+	callbacks  map[string]reflect.Value
+	category string
+	eventBus *EventBus
+	demo bool
+	features []string
+	functions map[string]reflect.Value
+	functionSchemas []map[string]interface{}
+	icon string
 	installationSteps []string
-	instructions      string
-	name              string
-	parameters        []*Parameter
-	publisher         *Publisher
-	softwareVersion   string
-	started           bool
-	token             string
-	website           string
+	instructions string
+	name string
+	parameters []*Parameter
+	softwareVersion string
+	started bool
+	token string
+	website string
 }
 
 func NewExtension() *Extension {
 	return &Extension{
 		callbacks: make(map[string]reflect.Value),
-		token: os.Getenv("TALKOPS_TOKEN"),
-	}
-}
-
-func NewExtensionFromToken(token string) *Extension {
-	return &Extension{
-		callbacks: make(map[string]reflect.Value),
-		token: token,
 	}
 }
 
@@ -199,35 +190,28 @@ func (e *Extension) Start() *Extension {
 	var mercure map[string]interface{}
 	json.Unmarshal(decoded, &mercure)
 	version := getSdkVersion()
-	if os.Getenv("ENV") == "development" {
-		NewManifest(func() map[string]interface{} {
-			return map[string]interface{}{
-				"category": e.category,
-				"demo": e.demo,
-				"features": e.features,
-				"icon": e.icon,
-				"name": e.name,
-				"sdk": map[string]interface{}{
-					"name": "go",
-					"version": version,
-				},
-				"softwareVersion": e.softwareVersion,
-				"website": e.website,
-			}
-		})
-		NewReadme(func() map[string]interface{} {
-			return map[string]interface{}{
-				"features": e.features,
-				"name": e.name,
-			}
-		})
-	}
-	e.publisher = NewPublisher(
-		func() map[string]interface{} {
-			return map[string]interface{}{
-				"mercure": mercure,
-			}
-		},
+	NewManifest(func() map[string]interface{} {
+		return map[string]interface{}{
+			"category": e.category,
+			"demo": e.demo,
+			"features": e.features,
+			"icon": e.icon,
+			"name": e.name,
+			"sdk": map[string]interface{}{
+				"name": "go",
+				"version": version,
+			},
+			"softwareVersion": e.softwareVersion,
+			"website": e.website,
+		}
+	})
+	NewReadme(func() map[string]interface{} {
+		return map[string]interface{}{
+			"features": e.features,
+			"name": e.name,
+		}
+	})
+	e.eventBus = NewEventBus(
 		func() map[string]interface{} {
 			return map[string]interface{}{
 				"category": e.category,
@@ -245,30 +229,29 @@ func (e *Extension) Start() *Extension {
 				"functionSchemas": e.functionSchemas,
 			}
 		},
+		func() map[string]interface{} {
+			return map[string]interface{}{
+				"callbacks": e.callbacks,
+				"functions": e.functions,
+				"parameters": e.parameters,
+			}
+		},
 	)
-	NewSubscriber(func() map[string]interface{} {
-		return map[string]interface{}{
-			"callbacks": e.callbacks,
-			"extension": e,
-			"functions": e.functions,
-			"mercure": mercure,
-			"parameters": e.parameters,
-			"publisher": e.publisher,
-		}
-	})
 	return e
 }
 
 func (e *Extension) EnableAlarm() *Extension {
-	if e.publisher != nil {
-		e.publisher.PublishEvent(map[string]interface{}{"type": "alarm"})
+	if e.eventBus != nil {
+		e.eventBus.PublishEvent(map[string]interface{}{
+			"type": "alarm",
+		})
 	}
 	return e
 }
 
 func (e *Extension) SendMedias(medias []*Media) *Extension {
-	if e.publisher != nil {
-		e.publisher.PublishEvent(map[string]interface{}{
+	if e.eventBus != nil {
+		e.eventBus.PublishEvent(map[string]interface{}{
 			"type": "medias",
 			"medias": medias,
 		})
@@ -277,8 +260,8 @@ func (e *Extension) SendMedias(medias []*Media) *Extension {
 }
 
 func (e *Extension) SendMessage(text string) *Extension {
-	if e.publisher != nil {
-		e.publisher.PublishEvent(map[string]interface{}{
+	if e.eventBus != nil {
+		e.eventBus.PublishEvent(map[string]interface{}{
 			"type": "message",
 			"text": text,
 		})
@@ -287,8 +270,8 @@ func (e *Extension) SendMessage(text string) *Extension {
 }
 
 func (e *Extension) SendNotification(text string) *Extension {
-	if e.publisher != nil {
-		e.publisher.PublishEvent(map[string]interface{}{
+	if e.eventBus != nil {
+		e.eventBus.PublishEvent(map[string]interface{}{
 			"type": "notification",
 			"text": text,
 		})

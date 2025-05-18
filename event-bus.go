@@ -1,53 +1,81 @@
 package talkops
 
 import (
-	_ "embed"
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/r3labs/sse/v2"
+	"net"
+	"os"
 	"reflect"
+	"time"
 )
 
-type Subscriber struct {
+type EventBus struct {
+	useState func() map[string]interface{}
 	useConfig func() map[string]interface{}
+	lastEventState string
+	client net.Conn
 }
 
-func NewSubscriber(useConfig func() map[string]interface{}) *Subscriber {
-	config := useConfig()
-	mercure := config["mercure"].(map[string]interface{})
-	topic := mercure["subscriber"].(map[string]interface{})["topic"].(string)
-	url := mercure["url"].(string)
-	token := mercure["subscriber"].(map[string]interface{})["token"].(string)
-	client := sse.NewClient(fmt.Sprintf("%s?topic=%s", url, topic))
-	if token != "" {
-		client.Headers["Authorization"] = fmt.Sprintf("Bearer %s", token)
-	}
-	s := &Subscriber{
+func NewEventBus(useState func() map[string]interface{}, useConfig func() map[string]interface{}) *EventBus {
+	conn, _ := net.Dial("unix", os.Getenv("TALKOPS_SOCKET"))
+	eb := &EventBus{
+		useState: useState,
 		useConfig: useConfig,
+		client: conn,
 	}
-	client.SubscribeRaw(func(msg *sse.Event) {
-		var event map[string]interface{}
-		if err := json.Unmarshal(msg.Data, &event); err != nil {
-			return
-		}
-		s.onEvent(event)
+	go eb.PublishEvent(map[string]interface{}{
+		"type": "init",
 	})
-	return s
+	go eb.publishStatePeriodically()
+	scanner := bufio.NewScanner(eb.client)
+	for scanner.Scan() {
+		var event map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
+			go eb.onEvent(event)
+		}
+	}
+	return eb
 }
 
-func (s *Subscriber) onEvent(event map[string]interface{}) {
-	config := s.useConfig()
+func (eb *EventBus) PublishState() {
+	event := map[string]interface{}{
+		"type": "state",
+		"state": eb.useState(),
+	}
+	eventJSON, _ := json.Marshal(event)
+	eb.lastEventState = string(eventJSON)
+	eb.PublishEvent(event)
+}
+
+func (eb *EventBus) PublishEvent(event map[string]interface{}) {
+	data, _ := json.Marshal(event)
+	eb.client.Write(data) // data is well transmitted
+}
+
+func (eb *EventBus) publishStatePeriodically() {
+	for {
+		time.Sleep(500 * time.Millisecond)
+		event := map[string]interface{}{
+			"type": "state",
+			"state": eb.useState(),
+		}
+		eventJSON, _ := json.Marshal(event)
+		lastEventState := string(eventJSON)
+		if eb.lastEventState != lastEventState {
+			eb.lastEventState = lastEventState
+			go eb.PublishEvent(event)
+		}
+	}
+}
+
+func (eb *EventBus) onEvent(event map[string]interface{}) {
+	config := eb.useConfig()
 	callbacks, _ := config["callbacks"].(map[string]reflect.Value)
 	functions, _ := config["functions"].(map[string]reflect.Value)
 	parameters, _ := config["parameters"].([]*Parameter)
-	publisher, _ := config["publisher"].(*Publisher)
 	eventType, _ := event["type"].(string)
 	switch eventType {
-	case "ping":
-		if publisher != nil {
-			publisher.OnPing()
-		}
-		return
 	case "function_call":
 		name, _ := event["name"].(string)
 		args, _ := event["args"].(map[string]interface{})
@@ -61,7 +89,7 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 				if len(result) > 0 {
 					event["output"] = result[0].Interface()
 				}
-				publisher.PublishEvent(event)
+				eb.PublishEvent(event)
 			}()
 		}
 		return
@@ -70,8 +98,6 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 		for name, value := range params {
 			for i := range parameters {
 				if parameters[i].Name == name {
-					fmt.Println(parameters[i].Name)
-					fmt.Println(value)
 					if value == nil {
 						parameters[i].SetValue("")
 					} else {
@@ -86,7 +112,7 @@ func (s *Subscriber) onEvent(event map[string]interface{}) {
 				ready = false
 			}
 		}
-		publisher.PublishState()
+		eb.PublishState()
 		if !ready {
 			return
 		}
