@@ -18,5 +18,7 @@ func NewManifest(useExtension func() map[string]interface{}) *Manifest {
 func (m *Manifest) generate() {
 	f, _ := os.Create("/app/manifest.json")
 	defer f.Close()
-	json.NewEncoder(f).Encode(m.useExtension())
+	encoder := json.NewEncoder(f)
+	encoder.SetIndent("", "  ")
+	encoder.Encode(m.useExtension())
 }

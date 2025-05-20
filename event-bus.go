@@ -15,16 +15,18 @@ import (
 type EventBus struct {
 	useState func() map[string]interface{}
 	useConfig func() map[string]interface{}
+	setEnabled func(enabled bool)
 	lastEventState string
 	client net.Conn
 	writeMutex sync.Mutex
 }
 
-func NewEventBus(useState func() map[string]interface{}, useConfig func() map[string]interface{}) *EventBus {
+func NewEventBus(useState func() map[string]interface{}, useConfig func() map[string]interface{}, setEnabled func(enabled bool)) *EventBus {
 	conn, _ := net.Dial("unix", os.Getenv("TALKOPS_SOCKET"))
 	eb := &EventBus{
 		useState: useState,
 		useConfig: useConfig,
+		setEnabled: setEnabled,
 		client: conn,
 	}
 	go eb.PublishEvent(map[string]interface{}{
@@ -86,8 +88,10 @@ func (eb *EventBus) onEvent(event map[string]interface{}) {
 	functions, _ := config["functions"].(map[string]reflect.Value)
 	parameters, _ := config["parameters"].([]*Parameter)
 	eventType, _ := event["type"].(string)
+	enabled, _ := event["enabled"].(bool)
 	switch eventType {
 	case "boot":
+		eb.setEnabled(enabled)
 		params, _ := event["parameters"].(map[string]interface{})
 		for name, value := range params {
 			for i := range parameters {
@@ -100,16 +104,24 @@ func (eb *EventBus) onEvent(event map[string]interface{}) {
 				}
 			}
 		}
-		ready := true
-		for i := range parameters {
-			if !parameters[i].Optional && !parameters[i].HasValue() {
-				ready = false
-			}
+	}
+	eb.PublishState()
+	switch eventType {
+	case "enable":
+		eb.setEnabled(true)
+	case "disable":
+		eb.setEnabled(false)
+	}
+	ready := true
+	for i := range parameters {
+		if !parameters[i].Optional && !parameters[i].HasValue() {
+			ready = false
 		}
-		eb.PublishState()
-		if !ready {
-			return
-		}
+	}
+	if !ready {
+		return
+	}
+	switch eventType {
 	case "function_call":
 		name, _ := event["name"].(string)
 		args, _ := event["args"].(map[string]interface{})

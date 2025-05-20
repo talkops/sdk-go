@@ -43,6 +43,7 @@ func getSdkVersion() string {
 type Extension struct {
 	callbacks  map[string]reflect.Value
 	category string
+	enabled bool
 	eventBus *EventBus
 	demo bool
 	features []string
@@ -53,7 +54,6 @@ type Extension struct {
 	instructions string
 	name string
 	parameters []*Parameter
-	softwareVersion string
 	started bool
 	token string
 	website string
@@ -64,6 +64,11 @@ func NewExtension() *Extension {
 		callbacks: make(map[string]reflect.Value),
 	}
 }
+
+func (e *Extension) IsEnabled() bool {
+	return e.enabled
+}
+
 
 func (e *Extension) SetDemo(demo bool) *Extension {
 	e.demo = demo
@@ -97,11 +102,6 @@ func (e *Extension) SetWebsite(website string) *Extension {
 		panic("website must be a valid URL")
 	}
 	e.website = website
-	return e
-}
-
-func (e *Extension) SetSoftwareVersion(version string) *Extension {
-	e.softwareVersion = version
 	return e
 }
 
@@ -201,7 +201,6 @@ func (e *Extension) Start() *Extension {
 				"name": "go",
 				"version": version,
 			},
-			"softwareVersion": e.softwareVersion,
 			"website": e.website,
 		}
 	})
@@ -225,7 +224,6 @@ func (e *Extension) Start() *Extension {
 					"name": "go",
 					"version": version,
 				},
-				"softwareVersion": e.softwareVersion,
 				"functionSchemas": e.functionSchemas,
 			}
 		},
@@ -235,6 +233,9 @@ func (e *Extension) Start() *Extension {
 				"functions": e.functions,
 				"parameters": e.parameters,
 			}
+		},
+		func(enabled bool) {
+			e.enabled = enabled
 		},
 	)
 	select {}
